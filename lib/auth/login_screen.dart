@@ -20,67 +20,96 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _error;
 
   Future<void> _signInWithGoogle() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
-    try {
+  setState(() {
+    _loading = true;
+    _error = null;
+  });
+
+  try {
+    late UserCredential cred;
+
+    if (kIsWeb) {
+      // WEB
+      // Use Firebase's popup flow instead of GoogleSignIn.authenticate(),
+      // because authenticate() is not supported by google_sign_in on Web.
+      final provider = GoogleAuthProvider();
+
+      cred = await FirebaseAuth.instance.signInWithPopup(provider);
+    } else {
+      // ANDROID / iOS
       final GoogleSignInAccount googleUser =
           await GoogleSignIn.instance.authenticate();
 
-      final GoogleSignInAuthentication googleAuth = googleUser.authentication;
+      final GoogleSignInAuthentication googleAuth =
+          googleUser.authentication;
 
       final credential = GoogleAuthProvider.credential(
         idToken: googleAuth.idToken,
       );
 
-      final cred = await FirebaseAuth.instance.signInWithCredential(credential);
+      cred = await FirebaseAuth.instance.signInWithCredential(credential);
+    }
 
-      final user = cred.user;
-      if (user == null) throw Exception('Google sign-in failed. Try again.');
-      final idToken = await user.getIdToken();
-      if (idToken == null) {
-        throw Exception('Could not get authentication token.');
-      }
+    final user = cred.user;
 
-      // Decide where to send the user based on which profiles already exist:
-      //  • only customer  → straight to the customer panel
-      //  • only owner      → straight to the owner panel
-      //  • both / neither  → ask them to choose
-      String? autoRole;
-      try {
-        final status = await ApiService.profileStatus(idToken);
-        final hasCustomer = status['hasCustomer'] == true;
-        final hasOwner = status['hasOwner'] == true;
-        if (hasCustomer && !hasOwner) {
-          autoRole = 'customer';
-        } else if (hasOwner && !hasCustomer) {
-          autoRole = 'owner';
-        }
-      } catch (_) {
-        autoRole = null; // on any failure, fall back to asking
-      }
+    if (user == null) {
+      throw Exception('Google sign-in failed. Try again.');
+    }
 
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-            builder: (_) =>
-                RoleSelectScreen(idToken: idToken, autoRole: autoRole)),
-      );
-    } on FirebaseAuthException catch (e) {
-      if (e.code == 'popup-closed-by-user' ||
-          e.code == 'cancelled-popup-request') {
-        // user backed out — no error message
-      } else {
-        setState(() => _error = e.message ?? 'Google sign-in failed.');
+    final idToken = await user.getIdToken();
+
+    if (idToken == null) {
+      throw Exception('Could not get authentication token.');
+    }
+
+    // Check which profiles already exist.
+    String? autoRole;
+
+    try {
+      final status = await ApiService.profileStatus(idToken);
+
+      final hasCustomer = status['hasCustomer'] == true;
+      final hasOwner = status['hasOwner'] == true;
+
+      if (hasCustomer && !hasOwner) {
+        autoRole = 'customer';
+      } else if (hasOwner && !hasCustomer) {
+        autoRole = 'owner';
       }
-    } catch (e) {
-      setState(() => _error = e.toString().replaceAll('Exception: ', ''));
-    } finally {
-      if (mounted) setState(() => _loading = false);
+    } catch (_) {
+      autoRole = null;
+    }
+
+    if (!mounted) return;
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => RoleSelectScreen(
+          idToken: idToken,
+          autoRole: autoRole,
+        ),
+      ),
+    );
+  } on FirebaseAuthException catch (e) {
+    if (e.code == 'popup-closed-by-user' ||
+        e.code == 'cancelled-popup-request') {
+      // User closed/cancelled Google sign-in.
+    } else {
+      setState(() {
+        _error = e.message ?? 'Google sign-in failed.';
+      });
+    }
+  } catch (e) {
+    setState(() {
+      _error = e.toString().replaceAll('Exception: ', '');
+    });
+  } finally {
+    if (mounted) {
+      setState(() => _loading = false);
     }
   }
+}
 
   @override
   Widget build(BuildContext context) {
